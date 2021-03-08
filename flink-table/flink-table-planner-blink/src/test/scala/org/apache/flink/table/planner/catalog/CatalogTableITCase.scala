@@ -25,13 +25,11 @@ import org.apache.flink.table.catalog.{CatalogDatabaseImpl, CatalogFunctionImpl,
 import org.apache.flink.table.planner.expressions.utils.Func0
 import org.apache.flink.table.planner.factories.utils.TestCollectionTableFactory
 import org.apache.flink.table.planner.runtime.utils.JavaUserDefinedScalarFunctions.JavaFunc0
-import org.apache.flink.table.planner.runtime.utils.TableEnvUtil.{execInsertSqlAndWaitResult, execInsertTableAndWaitResult}
 import org.apache.flink.table.planner.utils.DateTimeTestUtil.localDateTime
 import org.apache.flink.test.util.AbstractTestBase
 import org.apache.flink.types.Row
 import org.apache.flink.util.FileUtils
-
-import org.junit.Assert.{assertEquals, fail}
+import org.junit.Assert.{assertEquals, assertTrue, fail}
 import org.junit.rules.ExpectedException
 import org.junit.runner.RunWith
 import org.junit.runners.Parameterized
@@ -110,8 +108,7 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
         |)
       """.stripMargin
     tableEnv.executeSql(sinkDDL)
-    execInsertSqlAndWaitResult(
-      tableEnv, s"insert into sinkT select ${funcPrefix}myfunc(cast(1 as bigint))")
+    tableEnv.executeSql(s"insert into sinkT select ${funcPrefix}myfunc(cast(1 as bigint))").await()
     assertEquals(Seq(toRow(2L)), TestCollectionTableFactory.RESULT.sorted)
   }
 
@@ -179,7 +176,7 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
       """.stripMargin
     tableEnv.executeSql(sourceDDL)
     tableEnv.executeSql(sinkDDL)
-    execInsertSqlAndWaitResult(tableEnv, query)
+    tableEnv.executeSql(query).await()
     assertEquals(sourceData.sorted, TestCollectionTableFactory.RESULT.sorted)
   }
 
@@ -241,7 +238,7 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
         |FROM T1
         |GROUP BY TUMBLE(ts, INTERVAL '5' SECOND)
       """.stripMargin
-    execInsertSqlAndWaitResult(tableEnv, query)
+    tableEnv.executeSql(query).await()
 
     val expected =
       "2019-12-12 00:00:05.0,2019-12-12 00:00:04.004001,3,50.00\n" +
@@ -305,7 +302,7 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
         |FROM T1 /*+ OPTIONS('format.line-delimiter' = '#') */
         |GROUP BY TUMBLE(ts, INTERVAL '5' SECOND)
       """.stripMargin
-    execInsertSqlAndWaitResult(tableEnv, query)
+    tableEnv.executeSql(query).await()
 
     val expected =
       "2019-12-12 00:00:05.0|2019-12-12 00:00:04.004001|3|50.00\n" +
@@ -357,7 +354,7 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
       """.stripMargin
     tableEnv.executeSql(sourceDDL)
     tableEnv.executeSql(sinkDDL)
-    execInsertSqlAndWaitResult(tableEnv, query)
+    tableEnv.executeSql(query).await()
     assertEquals(expected.sorted, TestCollectionTableFactory.RESULT.sorted)
   }
 
@@ -406,7 +403,7 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
       """.stripMargin
     tableEnv.executeSql(sourceDDL)
     tableEnv.executeSql(sinkDDL)
-    execInsertSqlAndWaitResult(tableEnv, query)
+    tableEnv.executeSql(query).await()
     assertEquals(expected.sorted, TestCollectionTableFactory.RESULT.sorted)
   }
 
@@ -454,7 +451,7 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
       """.stripMargin
     tableEnv.executeSql(sourceDDL)
     tableEnv.executeSql(sinkDDL)
-    execInsertSqlAndWaitResult(tableEnv, query)
+    tableEnv.executeSql(query).await()
     assertEquals(expected.sorted, TestCollectionTableFactory.RESULT.sorted)
   }
 
@@ -505,7 +502,7 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
       """.stripMargin
     tableEnv.executeSql(sourceDDL)
     tableEnv.executeSql(sinkDDL)
-    execInsertSqlAndWaitResult(tableEnv, query)
+    tableEnv.executeSql(query).await()
     assertEquals(expected.sorted, TestCollectionTableFactory.RESULT.sorted)
   }
 
@@ -553,7 +550,7 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
       """.stripMargin
     tableEnv.executeSql(sourceDDL)
     tableEnv.executeSql(sinkDDL)
-    execInsertSqlAndWaitResult(tableEnv, query)
+    tableEnv.executeSql(query).await()
     assertEquals(expected.sorted, TestCollectionTableFactory.RESULT.sorted)
   }
 
@@ -595,9 +592,8 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
     tableEnv.executeSql(sourceDDL)
     tableEnv.executeSql(sinkDDL)
     expectedEx.expect(classOf[ValidationException])
-    expectedEx.expectMessage("Field types of query result and registered TableSink "
-      + "default_catalog.default_database.t2 do not match.")
-    tableEnv.executeSql(query)
+    expectedEx.expectMessage("Incompatible types for sink column 'c' at position 1.")
+    tableEnv.executeSql(query).await()
   }
 
   @Test
@@ -648,7 +644,7 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
       """.stripMargin
     tableEnv.executeSql(sourceDDL)
     tableEnv.executeSql(sinkDDL)
-    execInsertSqlAndWaitResult(tableEnv, query)
+    tableEnv.executeSql(query).await()
     assertEquals(expected.sorted, TestCollectionTableFactory.RESULT.sorted)
   }
 
@@ -697,7 +693,7 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
       """.stripMargin
     tableEnv.executeSql(sourceDDL)
     tableEnv.executeSql(sinkDDL)
-    execInsertSqlAndWaitResult(tableEnv, query)
+    tableEnv.executeSql(query).await()
     assertEquals(expected.sorted, TestCollectionTableFactory.RESULT.sorted)
   }
 
@@ -766,7 +762,7 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
     TestCollectionTableFactory.initData(sourceData)
 
     val query = "SELECT a, b, d FROM T1"
-    execInsertTableAndWaitResult(tableEnv.sqlQuery(query), "T2")
+    tableEnv.sqlQuery(query).executeInsert("T2").await()
     // temporary table T1 masks permanent table T1
     assertEquals(temporaryData.sorted, TestCollectionTableFactory.RESULT.sorted)
 
@@ -778,7 +774,7 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
         |DROP TEMPORARY TABLE IF EXISTS T1
       """.stripMargin
     tableEnv.executeSql(dropTemporaryTable)
-    execInsertTableAndWaitResult(tableEnv.sqlQuery(query), "T2")
+    tableEnv.sqlQuery(query).executeInsert("T2").await()
     // now we only have permanent view T1
     assertEquals(permanentData.sorted, TestCollectionTableFactory.RESULT.sorted)
   }
@@ -912,6 +908,29 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
   }
 
   @Test
+  def testDropTableWithIllegalWatermark(): Unit = {
+    // for FLINK-20937
+    val illegalDDL =
+      """
+        |create table t1 (
+        |  a bigint,
+        |  b bigint,
+        |  proctime as PROCTIME(),
+        |  WATERMARK FOR proctime as proctime - INTERVAL '5' SECOND
+        |) with (
+        |  'connector' = 'COLLECTION'
+        |)
+      """.stripMargin
+
+    // create table doesn't check the validity for now
+    tableEnv.executeSql(illegalDDL)
+    assert(tableEnv.listTables().sameElements(Array[String]("t1")))
+    // should success
+    tableEnv.executeSql("DROP TABLE t1")
+    assertTrue(tableEnv.listTables().isEmpty)
+  }
+
+  @Test
   def testDropViewSameNameWithTable(): Unit = {
     val createTable1 =
       """
@@ -965,14 +984,14 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
     tableEnv.executeSql("alter table t1 rename to t2")
     assert(tableEnv.listTables().sameElements(Array[String]("t2")))
     tableEnv.executeSql("alter table t2 set ('k1' = 'a', 'k2' = 'b')")
-    val expectedProperties = new util.HashMap[String, String]()
-    expectedProperties.put("connector", "COLLECTION")
-    expectedProperties.put("k1", "a")
-    expectedProperties.put("k2", "b")
-    val properties = tableEnv.getCatalog(tableEnv.getCurrentCatalog).get()
+    val expectedOptions = new util.HashMap[String, String]()
+    expectedOptions.put("connector", "COLLECTION")
+    expectedOptions.put("k1", "a")
+    expectedOptions.put("k2", "b")
+    val options = tableEnv.getCatalog(tableEnv.getCurrentCatalog).get()
       .getTable(new ObjectPath(tableEnv.getCurrentDatabase, "t2"))
-      .getProperties
-    assertEquals(expectedProperties, properties)
+      .getOptions
+    assertEquals(expectedOptions, options)
     val currentCatalog = tableEnv.getCurrentCatalog
     val currentDB = tableEnv.getCurrentDatabase
     tableEnv.executeSql("alter table t2 add constraint ct1 primary key(a) not enforced")
@@ -997,7 +1016,7 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
     assertEquals("cat1", tableEnv.getCurrentCatalog)
     tableEnv.executeSql("use catalog cat2")
     assertEquals("cat2", tableEnv.getCurrentCatalog)
-    assertEquals("cat2", tableEnv.executeSql("show current catalog").collect().next().toString)
+    assertEquals("+I[cat2]", tableEnv.executeSql("show current catalog").collect().next().toString)
   }
 
   @Test
@@ -1011,11 +1030,11 @@ class CatalogTableITCase(isStreamingMode: Boolean) extends AbstractTestBase {
     tableEnv.executeSql("use cat1.db1")
     assertEquals("db1", tableEnv.getCurrentDatabase)
     var currentDatabase = tableEnv.executeSql("show current database").collect().next().toString
-    assertEquals("db1", currentDatabase)
+    assertEquals("+I[db1]", currentDatabase)
     tableEnv.executeSql("use db2")
     assertEquals("db2", tableEnv.getCurrentDatabase)
     currentDatabase = tableEnv.executeSql("show current database").collect().next().toString
-    assertEquals("db2", currentDatabase)
+    assertEquals("+I[db2]", currentDatabase)
   }
 
   @Test

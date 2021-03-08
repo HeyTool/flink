@@ -26,6 +26,7 @@ import org.apache.flink.table.functions.AggregateFunction
 import org.apache.flink.table.planner.plan.utils.JavaUserDefinedAggFunctions.{CountDistinctWithMergeAndReset, WeightedAvgWithMergeAndReset}
 import org.apache.flink.table.planner.runtime.utils.{BatchTableEnvUtil, BatchTestBase, CollectionBatchExecTable}
 import org.apache.flink.table.planner.utils.{CountAggFunction, NonMergableCount}
+import org.apache.flink.table.utils.LegacyRowResource
 import org.apache.flink.test.util.TestBaseUtils
 
 import org.junit._
@@ -37,6 +38,9 @@ import scala.collection.JavaConverters._
 import scala.collection.mutable
 
 class AggregationITCase extends BatchTestBase {
+
+  @Rule
+  def usesLegacyRows: LegacyRowResource = LegacyRowResource.INSTANCE
 
   @Test
   def testAggregationWithCaseClass(): Unit = {
@@ -439,10 +443,6 @@ class Top10 extends AggregateFunction[Array[JTuple2[JInt, JFloat]], Array[JTuple
   }
 
   override def getValue(acc: Array[JTuple2[JInt, JFloat]]): Array[JTuple2[JInt, JFloat]] = acc
-
-  def resetAccumulator(acc: Array[JTuple2[JInt, JFloat]]): Unit = {
-    java.util.Arrays.fill(acc.asInstanceOf[Array[Object]], null)
-  }
 
   def merge(
       acc: Array[JTuple2[JInt, JFloat]],

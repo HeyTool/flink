@@ -257,13 +257,13 @@ function wait_rest_endpoint_up {
   local query_url=$1
   local endpoint_name=$2
   local successful_response_regex=$3
-  # wait at most 10 seconds until the endpoint is up
-  local TIMEOUT=20
+  # wait at most 30 seconds until the endpoint is up
+  local TIMEOUT=30
   for i in $(seq 1 ${TIMEOUT}); do
     # without the || true this would exit our script if the endpoint is not yet up
     QUERY_RESULT=$(curl ${CURL_SSL_ARGS} "$query_url" 2> /dev/null || true)
 
-    # ensure the response adapts with the suceessful regex
+    # ensure the response adapts with the successful regex
     if [[ ${QUERY_RESULT} =~ ${successful_response_regex} ]]; then
       echo "${endpoint_name} REST endpoint is up."
       return
@@ -367,7 +367,7 @@ function check_logs_for_errors {
       | grep -ic "error" || true)
   if [[ ${error_count} -gt 0 ]]; then
     echo "Found error in log files; printing first 500 lines; see full logs for details:"
-    find $FLINK_DIR/log/ -exec head -n 500 {} \;
+    find $FLINK_DIR/log/ -type f -exec head -n 500 {} \;
     EXIT_CODE=1
   else
     echo "No errors in log files."
@@ -387,6 +387,7 @@ function check_logs_for_exceptions {
    | grep -v  "WARN  org.apache.flink.shaded.akka.org.jboss.netty.channel.DefaultChannelPipeline" \
    | grep -v 'INFO.*AWSErrorCode' \
    | grep -v "RejectedExecutionException" \
+   | grep -v "CancellationException" \
    | grep -v "An exception was thrown by an exception handler" \
    | grep -v "Caused by: java.lang.ClassNotFoundException: org.apache.hadoop.yarn.exceptions.YarnException" \
    | grep -v "Caused by: java.lang.ClassNotFoundException: org.apache.hadoop.conf.Configuration" \
@@ -403,7 +404,7 @@ function check_logs_for_exceptions {
    | grep -ic "exception" || true)
   if [[ ${exception_count} -gt 0 ]]; then
     echo "Found exception in log files; printing first 500 lines; see full logs for details:"
-    find $FLINK_DIR/log/ -exec head -n 500 {} \;
+    find $FLINK_DIR/log/ -type f -exec head -n 500 {} \;
     EXIT_CODE=1
   else
     echo "No exceptions in log files."
@@ -425,7 +426,7 @@ function check_logs_for_non_empty_out_files {
    | grep "." \
    > /dev/null; then
     echo "Found non-empty .out files; printing first 500 lines; see full logs for details:"
-    find $FLINK_DIR/log/ -name '*.out' -exec head -n 500 {} \;
+    find $FLINK_DIR/log/ -type f -name '*.out' -exec head -n 500 {} \;
     EXIT_CODE=1
   else
     echo "No non-empty .out files."
@@ -434,6 +435,8 @@ function check_logs_for_non_empty_out_files {
 
 function shutdown_all {
   stop_cluster
+  # stop TMs which started by command: bin/taskmanager.sh start
+  "$FLINK_DIR"/bin/taskmanager.sh stop-all
   tm_kill_all
   jm_kill_all
 }
@@ -637,6 +640,8 @@ function wait_oper_metric_num_in_records {
     JOB_NAME="${3:-General purpose test job}"
     NUM_METRICS=$(get_num_metric_samples ${OPERATOR} '${JOB_NAME}')
     OLD_NUM_METRICS=${4:-${NUM_METRICS}}
+    local timeout="${5:-600}"
+    local i=0
     # monitor the numRecordsIn metric of the state machine operator in the second execution
     # we let the test finish once the second restore execution has processed 200 records
     while : ; do
@@ -651,6 +656,11 @@ function wait_oper_metric_num_in_records {
       if (( $NUM_RECORDS < $MAX_NUM_METRICS )); then
         echo "Waiting for job to process up to ${MAX_NUM_METRICS} records, current progress: ${NUM_RECORDS} records ..."
         sleep 1
+        ((i++))
+        if ((i > timeout)); then
+            echo "A timeout occurred waiting for job to process up to ${MAX_NUM_METRICS} records"
+            exit 1
+        fi
       else
         break
       fi
@@ -661,6 +671,8 @@ function wait_num_of_occurence_in_logs {
     local text=$1
     local number=$2
     local logs=${3:-standalonesession}
+    local timeout="${4:-600}"
+    local i=0
 
     echo "Waiting for text ${text} to appear ${number} of times in logs..."
 
@@ -673,15 +685,23 @@ function wait_num_of_occurence_in_logs {
 
       if (( N < number )); then
         sleep 1
+        ((i++))
+        if ((i > timeout)); then
+            echo "A timeout occurred waiting for ${text} to appear ${number} of times in logs."
+            exit 1
+        fi
       else
         break
       fi
     done
+
 }
 
 function wait_num_checkpoints {
     JOB=$1
     NUM_CHECKPOINTS=$2
+    local timeout="${3:-600}"
+    local i=0
 
     echo "Waiting for job ($JOB) to have at least $NUM_CHECKPOINTS completed checkpoints ..."
 
@@ -694,6 +714,11 @@ function wait_num_checkpoints {
 
       if (( N < NUM_CHECKPOINTS )); then
         sleep 1
+        ((i++))
+        if ((i > timeout)); then
+            echo "A timeout occurred waiting for job ($JOB) to have at least $NUM_CHECKPOINTS completed checkpoints ."
+            exit 1
+        fi
       else
         break
       fi
@@ -800,32 +825,44 @@ function extract_job_id_from_job_submission_return() {
     echo "$JOB_ID"
 }
 
-
-#
-# NOTE: This function requires at least Bash version >= 4. Mac OS in 2020 still ships 3.x
-#
 kill_test_watchdog() {
-    local watchdog_pid=`cat $TEST_DATA_DIR/job_watchdog.pid`
+    local watchdog_pid=$(cat $TEST_DATA_DIR/job_watchdog.pid)
     echo "Stopping job timeout watchdog (with pid=$watchdog_pid)"
     kill $watchdog_pid
 }
 
-run_test_with_timeout() {
-  local TEST_TIMEOUT_SECONDS=$1
-  shift
-  local TEST_COMMAND=$@
+#
+# NOTE: This function requires at least Bash version >= 4 due to the usage of $BASHPID. Mac OS in 2020 still ships 3.x
+#
+internal_run_with_timeout() {
+  local timeout_in_seconds="$1"
+  local on_failure="$2"
+  local command_label="$3"
+  local command="${@:4}"
 
   on_exit kill_test_watchdog
 
   (
-      cmdpid=$BASHPID
-      (sleep $TEST_TIMEOUT_SECONDS # set a timeout for this test
-      echo "Test (pid: $cmdpid) did not finish after $TEST_TIMEOUT_SECONDS seconds."
-      echo "Printing Flink logs and killing it:"
-      cat ${FLINK_DIR}/log/*
-      kill "$cmdpid") & watchdog_pid=$!
+      command_pid=$BASHPID
+      (sleep "${timeout_in_seconds}" # set a timeout for this command
+      echo "${command_label:-"The command '${command}'"} (pid: $command_pid) did not finish after $timeout_in_seconds seconds."
+      eval "${on_failure}"
+      kill "$command_pid") & watchdog_pid=$!
       echo $watchdog_pid > $TEST_DATA_DIR/job_watchdog.pid
       # invoke
-      $TEST_COMMAND
+      $command
   )
+}
+
+run_on_test_failure() {
+  echo "Printing Flink logs and killing it:"
+  cat ${FLINK_DIR}/log/*
+}
+
+run_test_with_timeout() {
+  internal_run_with_timeout $1 run_on_test_failure "Test" ${@:2}
+}
+
+run_with_timeout() {
+  internal_run_with_timeout $1 "" "" ${@:2}
 }

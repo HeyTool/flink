@@ -20,6 +20,7 @@ package org.apache.flink.table.planner.calcite
 
 import java.nio.charset.Charset
 import java.util
+
 import org.apache.calcite.avatica.util.TimeUnit
 import org.apache.calcite.jdbc.JavaTypeFactoryImpl
 import org.apache.calcite.rel.RelNode
@@ -29,16 +30,16 @@ import org.apache.calcite.sql.`type`.SqlTypeName._
 import org.apache.calcite.sql.`type`.{BasicSqlType, MapSqlType, SqlTypeName}
 import org.apache.calcite.sql.parser.SqlParserPos
 import org.apache.calcite.util.ConversionUtil
-import org.apache.flink.api.common.typeinfo.{NothingTypeInfo, TypeInformation}
+import org.apache.flink.api.common.typeinfo.{BasicTypeInfo, NothingTypeInfo, TypeInformation}
 import org.apache.flink.api.java.typeutils.TypeExtractor
 import org.apache.flink.table.api.{DataTypes, TableException, TableSchema, ValidationException}
 import org.apache.flink.table.calcite.ExtendedRelTypeFactory
 import org.apache.flink.table.planner.calcite.FlinkTypeFactory.toLogicalType
 import org.apache.flink.table.planner.plan.schema.{GenericRelDataType, _}
 import org.apache.flink.table.runtime.types.{LogicalTypeDataTypeConverter, PlannerTypeUtils}
-import org.apache.flink.table.types.inference.TypeInferenceUtil
 import org.apache.flink.table.types.logical._
 import org.apache.flink.table.typeutils.TimeIndicatorTypeInfo
+import org.apache.flink.table.utils.TableSchemaUtils
 import org.apache.flink.types.Nothing
 import org.apache.flink.util.Preconditions.checkArgument
 
@@ -96,8 +97,13 @@ class FlinkTypeFactory(typeSystem: RelDataTypeSystem)
         createSqlType(VARBINARY, t.asInstanceOf[VarBinaryType].getLength)
 
       case LogicalTypeRoot.DECIMAL =>
-        val decimalType = t.asInstanceOf[DecimalType]
-        createSqlType(DECIMAL, decimalType.getPrecision, decimalType.getScale)
+        t match {
+          case decimalType: DecimalType =>
+            createSqlType(DECIMAL, decimalType.getPrecision, decimalType.getScale)
+          case legacyType: LegacyTypeInformationType[_]
+              if legacyType.getTypeInformation == BasicTypeInfo.BIG_DEC_TYPE_INFO =>
+            createSqlType(DECIMAL, 38, 18)
+        }
 
       case LogicalTypeRoot.ROW =>
         val rowType = t.asInstanceOf[RowType]
@@ -220,6 +226,26 @@ class FlinkTypeFactory(typeSystem: RelDataTypeSystem)
   }
 
   /**
+    * Creates a table row type with the input fieldNames and input fieldTypes using
+    * FlinkTypeFactory. Table row type is table schema for Calcite RelNode. See getRowType of
+    * [[RelNode]]. Use FULLY_QUALIFIED to let each field must be referenced explicitly.
+    */
+  def buildRelNodeRowType(rowType: RowType): RelDataType = {
+    val fields = rowType.getFields
+    buildStructType(fields.map(_.getName), fields.map(_.getType), StructKind.FULLY_QUALIFIED)
+  }
+
+  /**
+    * Creates a struct type with the physical columns using FlinkTypeFactory
+    *
+    * @param tableSchema schema to convert to Calcite's specific one
+    * @return a struct type with the input fieldNames, input fieldTypes.
+    */
+  def buildPhysicalRelNodeRowType(tableSchema: TableSchema): RelDataType = {
+    buildRelNodeRowType(TableSchemaUtils.getPhysicalSchema(tableSchema))
+  }
+
+  /**
     * Creates a struct type with the input fieldNames and input fieldTypes using FlinkTypeFactory.
     *
     * @param fieldNames field names
@@ -315,6 +341,11 @@ class FlinkTypeFactory(typeSystem: RelDataTypeSystem)
       // keep precision/scale in sync with our type system's default value,
       // see DecimalType.USER_DEFAULT.
       createSqlType(typeName, DecimalType.DEFAULT_PRECISION, DecimalType.DEFAULT_SCALE)
+    } else if (typeName == COLUMN_LIST) {
+      // we don't support column lists and translate them into the unknown type,
+      // this makes it possible to ignore them in the validator and fall back to regular row types
+      // see also SqlFunction#deriveType
+      createUnknownType()
     } else {
       super.createSqlType(typeName)
     }
@@ -410,6 +441,7 @@ class FlinkTypeFactory(typeSystem: RelDataTypeSystem)
 }
 
 object FlinkTypeFactory {
+  val INSTANCE = new FlinkTypeFactory(new FlinkTypeSystem)
 
   def isTimeIndicatorType(t: LogicalType): Boolean = t match {
     case t: TimestampType

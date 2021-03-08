@@ -30,7 +30,7 @@ fi
 source "${HERE}/stage.sh"
 source "${HERE}/maven-utils.sh"
 source "${HERE}/controller_utils.sh"
-source "${HERE}/watchdog.sh"
+
 STAGE=$1
 
 # =============================================================================
@@ -69,6 +69,10 @@ export JAVA_TOOL_OPTIONS="-XX:+HeapDumpOnOutOfMemoryError"
 # some tests provide additional logs if they find this variable
 export IS_CI=true
 
+export WATCHDOG_ADDITIONAL_MONITORING_FILES="$DEBUG_FILES_OUTPUT_DIR/mvn-*.log"
+
+source "${HERE}/watchdog.sh"
+
 # =============================================================================
 # Step 1: Rebuild jars and install Flink to local maven repository
 # =============================================================================
@@ -101,6 +105,20 @@ if [ $STAGE == $STAGE_PYTHON ]; then
 	EXIT_CODE=$?
 else
 	MVN_TEST_OPTIONS="-Dflink.tests.with-openssl"
+	if [ $STAGE = $STAGE_LEGACY_SLOT_MANAGEMENT ]; then
+		if [[ ${PROFILE} == *"enable-adaptive-scheduler"* ]]; then
+			echo "Skipping legacy slot management test stage in adaptive scheduler job"
+			exit 0
+		fi
+		MVN_TEST_OPTIONS="$MVN_TEST_OPTIONS -Dflink.tests.disable-declarative"
+	fi
+	if [ $STAGE = $STAGE_FINEGRAINED_RESOURCE_MANAGEMENT ]; then
+		if [[ ${PROFILE} == *"enable-adaptive-scheduler"* ]]; then
+			echo "Skipping fine grained resource management test stage in adaptive scheduler job"
+			exit 0
+		fi
+		MVN_TEST_OPTIONS="$MVN_TEST_OPTIONS -Dflink.tests.enable-fine-grained"
+	fi
 	MVN_TEST_MODULES=$(get_test_modules_for_stage ${STAGE})
 
 	run_with_watchdog "run_mvn $MVN_COMMON_OPTIONS $MVN_TEST_OPTIONS $PROFILE $MVN_TEST_MODULES verify" $CALLBACK_ON_TIMEOUT

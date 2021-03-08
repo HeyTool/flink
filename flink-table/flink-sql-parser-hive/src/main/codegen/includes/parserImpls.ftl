@@ -397,42 +397,52 @@ SqlDrop SqlDropTable(Span s, boolean replace) :
     }
 }
 
-void TableColumn2(List<SqlNode> list) :
+void RegularColumn(List<SqlNode> list) :
 {
-    SqlParserPos pos;
     SqlIdentifier name;
     SqlDataTypeSpec type;
-    SqlCharStringLiteral comment = null;
+    SqlNode comment = null;
 }
 {
     name = SimpleIdentifier()
     type = ExtendedDataType()
-    [ <COMMENT> <QUOTED_STRING> {
-        comment = createStringLiteral(token.image, getPos());
-    }]
+    [
+        <COMMENT>
+        comment = StringLiteral()
+    ]
     {
-        SqlTableColumn tableColumn = new SqlTableColumn(name, type, null, comment, getPos());
-        list.add(tableColumn);
+        SqlTableColumn regularColumn = new SqlTableColumn.SqlRegularColumn(
+            getPos(),
+            name,
+            comment,
+            type,
+            null);
+        list.add(regularColumn);
     }
 }
 
 void PartColumnDef(List<SqlNode> list) :
 {
-    SqlParserPos pos;
     SqlIdentifier name;
     SqlDataTypeSpec type;
-    SqlCharStringLiteral comment = null;
+    SqlNode comment = null;
 }
 {
     name = SimpleIdentifier()
     type = DataType()
-    [ <COMMENT> <QUOTED_STRING> {
-        comment = createStringLiteral(token.image, getPos());
-    }]
+    [
+        <COMMENT>
+        comment = StringLiteral()
+    ]
     {
         type = type.withNullable(true);
-        SqlTableColumn tableColumn = new SqlTableColumn(name, type, null, comment, getPos());
-        list.add(tableColumn);
+        SqlTableColumn regularColumn = new SqlTableColumn.SqlRegularColumn(
+            getPos(),
+            name,
+            comment,
+            type,
+            null);
+        list.add(regularColumn);
     }
 }
 
@@ -515,7 +525,12 @@ void TableColumnWithConstraint(HiveTableCreationContext context) :
             context.notNullTraits.add(constraintTrait);
             context.notNullCols.add(name);
         }
-        SqlTableColumn tableColumn = new SqlTableColumn(name, type, null, comment, getPos());
+        SqlTableColumn tableColumn = new SqlTableColumn.SqlRegularColumn(
+            getPos(),
+            name,
+            comment,
+            type,
+            null);
         context.columnList.add(tableColumn);
     }
     [ <COMMENT> <QUOTED_STRING> {
@@ -1237,9 +1252,9 @@ SqlAlterTable SqlAlterHiveTableAddReplaceColumn(SqlParserPos startPos, SqlIdenti
     {
       List<SqlNode> cols = new ArrayList();
     }
-    TableColumn2(cols)
+    RegularColumn(cols)
     (
-      <COMMA> TableColumn2(cols)
+      <COMMA> RegularColumn(cols)
     )*
   <RPAREN>
   [
@@ -1282,13 +1297,21 @@ SqlAlterTable SqlAlterHiveTableChangeColumn(SqlParserPos startPos, SqlIdentifier
     |
     <RESTRICT>
   ]
-  { return new SqlAlterHiveTableChangeColumn(startPos.plus(getPos()),
-                                             tableIdentifier,
-                                             cascade,
-                                             oldName,
-                                             new SqlTableColumn(newName, newType, null, comment, newName.getParserPosition()),
-                                             first,
-                                             after); }
+  {
+    return new SqlAlterHiveTableChangeColumn(
+      startPos.plus(getPos()),
+      tableIdentifier,
+      cascade,
+      oldName,
+      new SqlTableColumn.SqlRegularColumn(
+        newName.getParserPosition(),
+        newName,
+        comment,
+        newType,
+        null),
+      first,
+      after);
+  }
 }
 
 SqlAlterTable SqlAlterHiveTableSerDe(SqlParserPos startPos, SqlIdentifier tableIdentifier, SqlNodeList partitionSpec) :
@@ -1468,4 +1491,113 @@ SqlAlterTable SqlDropPartitions(SqlParserPos startPos, SqlIdentifier tableIdenti
     }
   )*
   { return new SqlDropPartitions(startPos.plus(getPos()), tableIdentifier, ifExists, partSpecs); }
+}
+
+/**
+ * Hive syntax:
+ *
+ * SHOW PARTITIONS table_name [PARTITION partition_spec];
+ */
+SqlShowPartitions SqlShowPartitions() :
+{
+     SqlParserPos pos;
+     SqlIdentifier tableIdentifier;
+     SqlNodeList partitionSpec = null;
+}
+{
+    <SHOW> <PARTITIONS> { pos = getPos(); }
+        tableIdentifier = CompoundIdentifier()
+    [ <PARTITION> { partitionSpec = new SqlNodeList(getPos()); PartitionSpecCommaList(new SqlNodeList(getPos()), partitionSpec); } ]
+    { return new SqlShowPartitions(pos, tableIdentifier, partitionSpec); }
+}
+
+/**
+* Parses a load module statement.
+* LOAD MODULE module_name [WITH (property_name=property_value, ...)];
+*/
+SqlLoadModule SqlLoadModule() :
+{
+    SqlParserPos startPos;
+    SqlIdentifier moduleName;
+    SqlNodeList propertyList = SqlNodeList.EMPTY;
+}
+{
+    <LOAD> <MODULE> { startPos = getPos(); }
+    moduleName = SimpleIdentifier()
+    [
+        <WITH>
+        propertyList = TableProperties()
+    ]
+    {
+        return new SqlLoadModule(startPos.plus(getPos()),
+            moduleName,
+            propertyList);
+    }
+}
+
+/**
+* Parses an unload module statement.
+* UNLOAD MODULE module_name;
+*/
+SqlUnloadModule SqlUnloadModule() :
+{
+    SqlParserPos startPos;
+    SqlIdentifier moduleName;
+}
+{
+    <UNLOAD> <MODULE> { startPos = getPos(); }
+    moduleName = SimpleIdentifier()
+    {
+        return new SqlUnloadModule(startPos.plus(getPos()), moduleName);
+    }
+}
+
+/**
+* Parses an use modules statement.
+* USE MODULES module_name1 [, module_name2, ...];
+*/
+SqlUseModules SqlUseModules() :
+{
+    final Span s;
+    SqlIdentifier moduleName;
+    final List<SqlIdentifier> moduleNames = new ArrayList<SqlIdentifier>();
+}
+{
+    <USE> <MODULES> { s = span(); }
+    moduleName = SimpleIdentifier()
+    {
+        moduleNames.add(moduleName);
+    }
+    [
+        (
+            <COMMA>
+            moduleName = SimpleIdentifier()
+            {
+                moduleNames.add(moduleName);
+            }
+        )+
+    ]
+    {
+        return new SqlUseModules(s.end(this), moduleNames);
+    }
+}
+
+/**
+* Parses a show modules statement.
+* SHOW [FULL] MODULES;
+*/
+SqlShowModules SqlShowModules() :
+{
+    SqlParserPos startPos;
+    boolean requireFull = false;
+}
+{
+    <SHOW> { startPos = getPos(); }
+    [
+      <FULL> { requireFull = true; }
+    ]
+    <MODULES>
+    {
+        return new SqlShowModules(startPos.plus(getPos()), requireFull);
+    }
 }
